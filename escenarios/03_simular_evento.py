@@ -14,7 +14,6 @@ Correr:
     python3 escenarios/03_simular_evento.py
 """
 
-import asyncio
 import os
 import sys
 from datetime import datetime, timezone
@@ -48,7 +47,7 @@ EVENTOS_EJEMPLO = {
 }
 
 
-async def main():
+def main():
     print(f"\nSimulador de eventos Kobra")
     print(f"Enviando evento a: {WEBHOOK_LOCAL_URL}")
     print()
@@ -65,8 +64,8 @@ async def main():
     print()
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(WEBHOOK_LOCAL_URL, json=payload)
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(WEBHOOK_LOCAL_URL, json=payload)
             if resp.status_code == 200:
                 print(f"✓ Evento enviado. Tu servidor lo procesó.")
                 print(f"  Mirá la terminal donde corre servidor_webhooks.py para ver el log.")
@@ -77,4 +76,4 @@ async def main():
         print(f"  ¿Tenés servidor_webhooks.py corriendo en otra terminal?")
 
 
-asyncio.run(main())
+main()

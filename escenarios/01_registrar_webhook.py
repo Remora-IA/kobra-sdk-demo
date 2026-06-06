@@ -11,7 +11,6 @@ Correr:
     python3 escenarios/01_registrar_webhook.py
 """
 
-import asyncio
 import os
 import sys
 
@@ -23,7 +22,7 @@ from kobra import KobraClient
 load_dotenv()
 
 
-async def main():
+def main():
     kobra = KobraClient(
         api_key=os.environ["KOBRA_API_KEY"],
         base_url=os.environ.get("KOBRA_BASE_URL"),
@@ -55,13 +54,13 @@ async def main():
     print("...")
 
     try:
-        resultado = await kobra.registrar_webhook(
+        resultado = kobra.registrar_webhook(
             url=webhook_url,
             eventos=["cobrado", "acuerdo"],
         )
         print(f"\n✓ Webhook registrado exitosamente")
-        print(f"  URL:     {resultado['url']}")
-        print(f"  Eventos: {', '.join(resultado['eventos'])}")
+        print(f"  URL:     {resultado.url}")
+        print(f"  Eventos: {', '.join(resultado.eventos)}")
         print(f"\nDesde ahora, Kobra te avisará automáticamente cuando:")
         print(f"  - Un deudor pague              → evento 'cobrado'")
         print(f"  - Un deudor prometa pagar      → evento 'acuerdo'")
@@ -69,4 +68,4 @@ async def main():
         print(f"\n✗ Error: {e}")
 
 
-asyncio.run(main())
+main()

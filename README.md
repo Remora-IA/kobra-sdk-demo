@@ -1,5 +1,17 @@
 # Kobra SDK — Guía para el desarrollador de Somos Rentable
 
+## Documentos del proyecto
+
+| Documento | Para qué sirve |
+|-----------|---------------|
+| [docs/flujos.md](docs/flujos.md) | Qué podés hacer con el SDK y cómo |
+| [docs/roadmap.md](docs/roadmap.md) | Qué viene próximamente |
+| [docs/STATUS.md](docs/STATUS.md) | Historial de sesiones de trabajo |
+| [docs/WHY.md](docs/WHY.md) | Por qué existe este proyecto |
+| [docs/REGISTRO-ERRORES.md](docs/REGISTRO-ERRORES.md) | Errores conocidos y su estado |
+
+---
+
 ## La situación
 
 Sos el dev de Somos Rentable. Tu PM te pasó este ticket:
