@@ -38,13 +38,28 @@ Eso es todo. Dos llamadas. El resto lo hace Kobra.
 
 ---
 
+## Documentación viva del SDK
+
+Antes de empezar, mirá la **API reference interactiva** del SDK — Swagger UI con
+los 7 endpoints reales, request/response examples, y botón "Try it out":
+
+🔗 **https://kobra.remora-ia.com/api/sdk/docs**
+
+Esta es la fuente de verdad. Si algo de este README no matchea la API
+reference, la API reference manda.
+
+OpenAPI spec crudo (para generar clientes en otros lenguajes o importar a Postman):
+https://kobra.remora-ia.com/api/sdk/openapi.json
+
+---
+
 ## Antes de empezar
 
 Necesitás dos cosas que te da el equipo de Kobra:
 
 ```
 KOBRA_API_KEY=...         ← tu clave de acceso
-KOBRA_BASE_URL=https://kobra-backend-760602975866.us-central1.run.app
+KOBRA_BASE_URL=https://kobra.remora-ia.com
 ```
 
 Copialas en un archivo `.env` en este directorio:

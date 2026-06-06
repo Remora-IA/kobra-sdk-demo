@@ -21,10 +21,10 @@ Correr:
     python3 escenarios/04_flujo_completo.py
 """
 
-import asyncio
 import os
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -66,7 +66,7 @@ def _levantar_servidor(puerto: int) -> None:
 # Flujo principal
 # -----------------------------------------------------------------------
 
-async def main():
+def main():
     api_key = os.environ.get("KOBRA_API_KEY", "")
     base_url = os.environ.get("KOBRA_BASE_URL", "")
     puerto = int(os.environ.get("WEBHOOK_LOCAL_PORT", 8000))
@@ -86,12 +86,12 @@ async def main():
     # ----------------------------------------------------------------
     print(f"[0/5] Verificando conexión con Kobra...")
     try:
-        estado = await kobra.status()
-        if not estado.get("configurado"):
+        estado = kobra.status()
+        if not estado.configurado:
             print(f"  ✗ El servidor de Kobra no tiene SDK configurado.")
             print(f"    Pedile al equipo de Kobra que agregue KOBRA_SDK_API_KEY al deploy.")
             return
-        print(f"  ✓ Kobra SDK v{estado.get('sdk_version', '?')} — OK\n")
+        print(f"  ✓ Kobra SDK v{estado.sdk_version} — OK\n")
     except Exception as e:
         print(f"  ✗ No se pudo conectar a Kobra: {e}\n")
         return
@@ -102,7 +102,7 @@ async def main():
     print(f"[1/5] Levantando servidor de webhooks local (puerto {puerto})...")
     t = threading.Thread(target=_levantar_servidor, args=(puerto,), daemon=True)
     t.start()
-    await asyncio.sleep(1.5)  # esperar que levante
+    time.sleep(1.5)
     print(f"  ✓ Servidor listo en http://localhost:{puerto}/webhooks/kobra\n")
 
     # ----------------------------------------------------------------
@@ -126,21 +126,23 @@ async def main():
     print(f"\n  → Llamando a Kobra para iniciar cobranza...\n")
 
     try:
-        resultado = await kobra.iniciar_cobranza(
+        resultado = kobra.iniciar_cobranza(
             deudor_id="SR-12345",
             nombre=deudor["nombre"],
-            telefono="+56912345678",
+            telefono="+56912345678",  # ← reemplazá por número real para ver WhatsApp
             monto=deudor["deuda"],
             concepto="Cuota octubre 2026 — Proyecto Bello Horizonte",
         )
-        conv_id = resultado["conversation_id"]
+        conv_id = resultado.conversation_id
         print(f"  ✓ Cobranza iniciada — conversation_id: {conv_id}")
-        print(f"  Carolina está contactando al deudor por WhatsApp...\n")
+        print(f"  Carolina está contactando al deudor por WhatsApp...")
+        print(f"  (Con número ficticio el mensaje no llega al celular, pero el flujo continúa.)\n")
 
-    except CobranzaYaActiva:
-        conv_id = "EXISTENTE"
+    except CobranzaYaActiva as e:
+        conv_id = e.existing_conversation_id or "sin-id"
         print(f"  ⚠  Ya había una cobranza activa para este número.")
-        print(f"     Continuando con la simulación...\n")
+        print(f"     conversation_id existente: {conv_id}")
+        print(f"     Continuando la simulación con esa cobranza...\n")
 
     except KobraError as e:
         print(f"  ✗ Error al iniciar cobranza: {e.detail}")
@@ -153,7 +155,7 @@ async def main():
     print(f"[4/5] (Simulando) Han pasado 2 días. El deudor pagó.")
     print(f"  En la realidad: Kobra detecta el pago bancario y dispara el webhook.")
     print(f"  En esta demo:   simulamos el POST que Kobra haría a tu sistema.\n")
-    await asyncio.sleep(1)
+    time.sleep(1)
 
     # ----------------------------------------------------------------
     # Paso 5: simular webhook on_cobrado
@@ -169,8 +171,8 @@ async def main():
     }
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.post(
                 f"http://localhost:{puerto}/webhooks/kobra",
                 json=payload_cobrado,
             )
@@ -201,4 +203,4 @@ async def main():
     print(f"{'='*60}\n")
 
 
-asyncio.run(main())
+main()

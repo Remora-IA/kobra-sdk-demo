@@ -11,7 +11,6 @@ Correr:
     python3 escenarios/02_iniciar_cobranza.py
 """
 
-import asyncio
 import os
 import sys
 
@@ -29,13 +28,16 @@ load_dotenv()
 DEUDOR_EJEMPLO = {
     "deudor_id": "SR-12345",           # ID interno de Somos Rentable
     "nombre":    "Juan Pérez",
-    "telefono":  "+56912345678",       # número real o de prueba
+    "telefono":  "+56912345678",       # ← REEMPLAZAR por un número real con WhatsApp
+                                       #   para ver el mensaje llegar al celular.
+                                       #   Con número ficticio la cobranza igual se crea
+                                       #   pero el WhatsApp no se entrega.
     "monto":     150000,               # pesos chilenos
     "concepto":  "Cuota octubre 2026 — Proyecto Bello Horizonte Depto 304",
 }
 
 
-async def main():
+def main():
     kobra = KobraClient(
         api_key=os.environ["KOBRA_API_KEY"],
         base_url=os.environ.get("KOBRA_BASE_URL"),
@@ -51,14 +53,14 @@ async def main():
     print()
 
     try:
-        resultado = await kobra.iniciar_cobranza(**DEUDOR_EJEMPLO)
+        resultado = kobra.iniciar_cobranza(**DEUDOR_EJEMPLO)
 
         print(f"✓ Cobranza iniciada")
-        print(f"\n  conversation_id: {resultado['conversation_id']}")
+        print(f"\n  conversation_id: {resultado.conversation_id}")
         print(f"  (Guardalo si querés rastrear este caso)")
         print(f"\n  Primer mensaje que Carolina le envió al deudor:")
         print(f"  ┌─────────────────────────────────────────────┐")
-        for linea in (resultado.get("primer_mensaje") or "").split("\n"):
+        for linea in (resultado.primer_mensaje or "").split("\n"):
             print(f"  │ {linea}")
         print(f"  └─────────────────────────────────────────────┘")
         print(f"\n  Carolina va a negociar sola a partir de acá.")
@@ -67,7 +69,10 @@ async def main():
     except CobranzaYaActiva as e:
         print(f"[!] Ya existe una cobranza activa para este número.")
         print(f"    {e.detail}")
-        print(f"    Podés rastrear el caso con el conversation_id anterior.")
+        if e.existing_conversation_id:
+            print(f"    conversation_id existente: {e.existing_conversation_id}")
+            print(f"    → Podés consultarlo con: kobra.obtener_cobranza('{e.existing_conversation_id}')")
+            print(f"    → O cancelarlo con:      kobra.cancelar_cobranza('{e.existing_conversation_id}', motivo='error_carga')")
 
     except KobraError as e:
         print(f"✗ Error de Kobra ({e.status_code}): {e.detail}")
@@ -76,4 +81,4 @@ async def main():
         print(f"✗ Error inesperado: {e}")
 
 
-asyncio.run(main())
+main()

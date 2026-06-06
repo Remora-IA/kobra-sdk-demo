@@ -1,25 +1,59 @@
 """
-kobra.py — cliente SDK de Kobra para Somos Rentable.
+kobra.py — cliente SDK de Kobra.
 
-Este es el único archivo que Somos Rentable necesita copiar a su proyecto.
-No es un package — es un módulo de una sola dependencia (httpx).
+Único archivo que el desarrollador necesita copiar a su proyecto.
+Dependencia: pip install httpx
 
 Uso:
     from kobra import KobraClient
 
     kobra = KobraClient(api_key="...", base_url="...")
-    resultado = await kobra.iniciar_cobranza(
+    resultado = kobra.iniciar_cobranza(
         deudor_id="SR-12345",
         nombre="Juan Pérez",
         telefono="+56912345678",
         monto=150000,
     )
+    print(resultado.conversation_id)
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import httpx
 
+
+# ---------------------------------------------------------------------------
+# Tipos de respuesta
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CobranzaResponse:
+    ok: bool
+    conversation_id: str
+    deudor_id: str
+    estado: str
+    primer_mensaje: str | None = None
+
+
+@dataclass
+class WebhookResponse:
+    ok: bool
+    url: str
+    eventos: list[str]
+
+
+@dataclass
+class StatusResponse:
+    sdk_version: str
+    configurado: bool
+    webhooks_activos: int
+
+
+# ---------------------------------------------------------------------------
+# Errores
+# ---------------------------------------------------------------------------
 
 class KobraError(Exception):
     """Error retornado por la API de Kobra."""
@@ -30,9 +64,26 @@ class KobraError(Exception):
 
 
 class CobranzaYaActiva(KobraError):
-    """Ya existe una cobranza activa para ese número de teléfono."""
-    pass
+    """Ya existe una cobranza activa para ese número de teléfono.
 
+    Atributos:
+        existing_conversation_id — ID de la cobranza activa existente.
+            Usalo en GET /cobranzas/{id} para consultarla, o en
+            POST /cobranzas/{id}/cancelar para cerrarla antes de crear una nueva.
+    """
+    def __init__(self, status_code: int, detail: str | dict):
+        self.existing_conversation_id: str | None = None
+        if isinstance(detail, dict):
+            self.existing_conversation_id = detail.get("existing_conversation_id")
+            message = detail.get("message", str(detail))
+        else:
+            message = str(detail)
+        super().__init__(status_code, message)
+
+
+# ---------------------------------------------------------------------------
+# Cliente
+# ---------------------------------------------------------------------------
 
 class KobraClient:
     """
@@ -54,36 +105,27 @@ class KobraClient:
         }
 
     # ------------------------------------------------------------------
-    # Métodos principales
+    # Cobranzas
     # ------------------------------------------------------------------
 
-    async def iniciar_cobranza(
+    def iniciar_cobranza(
         self,
         deudor_id: str,
         nombre: str,
         telefono: str,
         monto: float,
         concepto: str | None = None,
-    ) -> dict:
+        metadata: dict | None = None,
+    ) -> CobranzaResponse:
         """
         Dispara una cobranza para un deudor.
-
         Carolina le escribe por WhatsApp en segundos.
 
-        Parámetros:
-            deudor_id  — tu ID interno (lo recibís de vuelta en los webhooks)
-            nombre     — nombre completo del deudor
-            telefono   — formato E.164: "+56912345678"
-            monto      — pesos chilenos, sin decimales
-            concepto   — opcional, aparece en el comprobante que recibe el deudor
-
-        Retorna dict con: ok, conversation_id, deudor_id, estado, primer_mensaje
-
         Lanza:
-            CobranzaYaActiva  — si ya hay una cobranza activa para ese teléfono
-            KobraError        — para cualquier otro error de la API
+            CobranzaYaActiva — si ya hay una cobranza activa para ese teléfono
+            KobraError       — para cualquier otro error de la API
         """
-        body = {
+        body: dict = {
             "deudor_id": deudor_id,
             "nombre": nombre,
             "telefono": telefono,
@@ -91,62 +133,124 @@ class KobraClient:
         }
         if concepto:
             body["concepto"] = concepto
+        if metadata:
+            body["metadata"] = metadata
 
-        return await self._post("/api/sdk/cobranza", body, expected_status=201)
+        data = self._post("/api/sdk/cobranzas", body, expected_status=201)
+        return CobranzaResponse(
+            ok=data["ok"],
+            conversation_id=data["conversation_id"],
+            deudor_id=data["deudor_id"],
+            estado=data["estado"],
+            primer_mensaje=data.get("primer_mensaje"),
+        )
 
-    async def registrar_webhook(
+    def listar_cobranzas(
+        self,
+        estado: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        """Lista cobranzas con filtros opcionales."""
+        params: dict = {"page": page, "page_size": page_size}
+        if estado:
+            params["estado"] = estado
+        return self._get("/api/sdk/cobranzas", params)
+
+    def obtener_cobranza(self, conversation_id: str) -> dict:
+        """Detalle de una cobranza por su conversation_id."""
+        return self._get(f"/api/sdk/cobranzas/{conversation_id}")
+
+    def cancelar_cobranza(
+        self,
+        conversation_id: str,
+        motivo: str | None = None,
+        notificar_deudor: bool = True,
+    ) -> dict:
+        """Cancela una cobranza activa."""
+        body: dict = {"notificar_deudor": notificar_deudor}
+        if motivo:
+            body["motivo"] = motivo
+        return self._post(f"/api/sdk/cobranzas/{conversation_id}/cancelar", body)
+
+    def cobranzas_bulk(self, cobranzas: list[dict]) -> dict:
+        """Dispara hasta 500 cobranzas en una sola llamada."""
+        return self._post("/api/sdk/cobranzas/bulk", {"cobranzas": cobranzas})
+
+    # ------------------------------------------------------------------
+    # Webhooks
+    # ------------------------------------------------------------------
+
+    def registrar_webhook(
         self,
         url: str,
         eventos: list[str] | None = None,
-    ) -> dict:
+    ) -> WebhookResponse:
         """
         Registra la URL a la que Kobra enviará eventos.
-
-        Eventos disponibles: "cobrado", "acuerdo"
-        Si no especificás eventos, recibís todos.
-
-        Solo necesitás llamar esto una vez (o cuando cambie tu URL).
+        Eventos disponibles: "cobrado", "acuerdo". Default: todos.
+        Solo necesitás llamar esto una vez.
         """
         body: dict = {"url": url}
         if eventos:
             body["eventos"] = eventos
-        return await self._put("/api/sdk/webhook", body)
+        data = self._put("/api/sdk/webhook", body)
+        return WebhookResponse(ok=data["ok"], url=data["url"], eventos=data["eventos"])
 
-    async def status(self) -> dict:
-        """
-        Verifica que el SDK está configurado y el servidor responde.
-        No requiere autenticación.
-        """
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{self._base_url}/api/sdk/status")
-            return resp.json()
+    # ------------------------------------------------------------------
+    # Sistema
+    # ------------------------------------------------------------------
+
+    def status(self) -> StatusResponse:
+        """Verifica que el SDK está configurado y el servidor responde. Sin auth."""
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(f"{self._base_url}/api/sdk/status")
+            data = resp.json()
+        return StatusResponse(
+            sdk_version=data["sdk_version"],
+            configurado=data["configurado"],
+            webhooks_activos=data["webhooks_activos"],
+        )
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    async def _post(self, path: str, body: dict, expected_status: int = 200) -> dict:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
+    def _post(self, path: str, body: dict, expected_status: int = 200) -> dict:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(
                 f"{self._base_url}{path}",
                 json=body,
                 headers=self._headers,
             )
-            return self._handle(resp, expected_status)
+        return self._handle(resp, expected_status)
 
-    async def _put(self, path: str, body: dict) -> dict:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.put(
+    def _put(self, path: str, body: dict) -> dict:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.put(
                 f"{self._base_url}{path}",
                 json=body,
                 headers=self._headers,
             )
-            return self._handle(resp, 200)
+        return self._handle(resp, 200)
+
+    def _get(self, path: str, params: dict | None = None) -> dict:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.get(
+                f"{self._base_url}{path}",
+                params=params,
+                headers=self._headers,
+            )
+        return self._handle(resp, 200)
 
     def _handle(self, resp: httpx.Response, expected_status: int) -> dict:
         if resp.status_code == expected_status:
             return resp.json()
-        detail = resp.json().get("detail", resp.text) if resp.headers.get("content-type", "").startswith("application/json") else resp.text
+        detail = (
+            resp.json().get("detail", resp.text)
+            if "application/json" in resp.headers.get("content-type", "")
+            else resp.text
+        )
         if resp.status_code == 409:
             raise CobranzaYaActiva(409, detail)
         raise KobraError(resp.status_code, detail)
