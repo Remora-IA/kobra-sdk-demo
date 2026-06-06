@@ -43,7 +43,7 @@ class KobraClient:
         base_url  — URL base del servidor (default: producción)
     """
 
-    DEFAULT_BASE_URL = "https://kobra-backend-760602975866.us-central1.run.app"
+    DEFAULT_BASE_URL = "https://kobra.remora-ia.com"
 
     def __init__(self, api_key: str, base_url: str | None = None):
         self._api_key = api_key
