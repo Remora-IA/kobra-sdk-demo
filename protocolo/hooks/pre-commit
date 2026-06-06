@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Pre-commit hook — enforcement de LFS locking.
+# Activar una vez por clone:  git config core.hooksPath .githooks
+#
+# Regla (COLLABORATION.md Regla 6):
+#   Antes de commitear cambios en cualquier archivo, ese archivo DEBE
+#   estar lockeado por vos vía git lfs lock. Esto garantiza que otras
+#   sesiones paralelas se enteren de tu intención antes de que ocurra
+#   la colisión.
+#
+# Excepciones (commits permitidos sin lock):
+#   - Archivos creados nuevos (untracked → added): no requieren lock previo
+#     porque otra sesión no puede estarlos editando.
+#   - Archivos borrados completamente: si los estás borrando, lockeás el path.
+#   - Commits en docs/STATUS.md, docs/REGISTRO-ERRORES.md y docs/claims/*:
+#     son journals que TODA sesión actualiza al terminar — lockearlos
+#     bloquearía el cierre de todas las demás.
+#   - Merge commits: git los genera con archivos resueltos, no estás editando.
+#
+# Si el hook te bloquea, NO uses --no-verify. Lockeá el archivo, reintentá.
+# Si no podés lockear (otra sesión lo tiene), parar y resolver según Regla 6
+# COLLABORATION.md (esperar señal o force-unlock si tiene >2h).
+
+# Si LFS no está instalado, no bloquear (entornos donde LFS no aplica).
+if ! command -v git-lfs &>/dev/null && ! git lfs version &>/dev/null 2>&1; then
+    exit 0
+fi
+
+# Merge commit: saltar.
+if [[ -f .git/MERGE_HEAD ]] || [[ -f .git/CHERRY_PICK_HEAD ]] || [[ -f .git/REBASE_HEAD ]]; then
+    exit 0
+fi
+
+# Archivos exentos (journals que múltiples sesiones tocan al cerrar).
+EXEMPT_PATTERNS=(
+    "^docs/STATUS\.md$"
+    "^docs/REGISTRO-ERRORES\.md$"
+    "^docs/claims/"
+    "^docs/PROTOCOLO-MEJORA\.md$"
+)
+
+is_exempt() {
+    local file="$1"
+    for pat in "${EXEMPT_PATTERNS[@]}"; do
+        [[ "$file" =~ $pat ]] && return 0
+    done
+    return 1
+}
+
+# Obtener username LFS actual (para comparar contra owner del lock).
+LFS_USER=$(git config --get user.name 2>/dev/null || git config --get user.email 2>/dev/null)
+
+# Cache de locks activos (una sola llamada al server).
+LOCKS=$(git lfs locks 2>/dev/null || true)
+
+# Archivos modificados a commitear — solo M (Modified).
+# A (Added): nuevos, no requieren lock (otra sesión no puede editarlos).
+# D (Deleted): si estoy borrando, no hay edición concurrente posible —
+#   el lock no protege nada. Exigirlo solo bloquea cleanup legítimo.
+CHANGED=$(git diff --cached --name-status --diff-filter=M | awk '{print $2}')
+
+if [[ -z "$CHANGED" ]]; then
+    exit 0
+fi
+
+MISSING_LOCKS=()
+WRONG_OWNER=()
+
+while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    is_exempt "$file" && continue
+
+    # ¿Está lockeado?
+    lock_line=$(echo "$LOCKS" | awk -v f="$file" '$1 == f {print; exit}')
+
+    if [[ -z "$lock_line" ]]; then
+        MISSING_LOCKS+=("$file")
+    else
+        # Sí está lockeado — ¿soy yo el dueño? (case-insensitive: GitHub LFS
+        # normaliza el username con capitalización, git config puede tener
+        # otro casing).
+        owner=$(echo "$lock_line" | awk '{print $2}')
+        if [[ -n "$LFS_USER" && "${owner,,}" != "${LFS_USER,,}" ]]; then
+            WRONG_OWNER+=("$file ($owner)")
+        fi
+    fi
+done <<< "$CHANGED"
+
+if [[ ${#MISSING_LOCKS[@]} -gt 0 || ${#WRONG_OWNER[@]} -gt 0 ]]; then
+    echo
+    echo "✗ COMMIT BLOQUEADO — falta lockear archivos modificados (Regla 6 COLLABORATION.md)."
+    echo
+
+    if [[ ${#MISSING_LOCKS[@]} -gt 0 ]]; then
+        echo "Archivos modificados sin lock:"
+        for f in "${MISSING_LOCKS[@]}"; do
+            echo "    $f"
+        done
+        echo
+        echo "Para resolver, ejecutá:"
+        for f in "${MISSING_LOCKS[@]}"; do
+            echo "    git lfs lock \"$f\""
+        done
+        echo
+    fi
+
+    if [[ ${#WRONG_OWNER[@]} -gt 0 ]]; then
+        echo "Archivos lockeados por OTRA sesión:"
+        for entry in "${WRONG_OWNER[@]}"; do
+            echo "    $entry"
+        done
+        echo
+        echo "→ Coordiná: esperar señal de la otra sesión (push a draft) o force-unlock"
+        echo "  si tiene más de 2h sin actividad (Regla 6 COLLABORATION.md)."
+        echo
+    fi
+
+    echo "Si no podés lockear (otra sesión lo tiene): esperar señal (push)"
+    echo "o force-unlock si tiene >2h (Regla 6 COLLABORATION.md)."
+    echo "NO uses --no-verify — viola el protocolo y rompe coordinación."
+    echo
+    exit 1
+fi
+
+exit 0

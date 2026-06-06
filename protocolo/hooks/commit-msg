@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# commit-msg hook — verifica que feat commits tengan su feature en roadmap.md
+#
+# Por qué existe: el protocolo de ROADMAP CHECK en CLAUDE.md era texto que
+# el AI podía ignorar bajo presión ("decidí tú"). Este hook es mecánico —
+# el harness lo corre independientemente de lo que el AI quiera hacer.
+#
+# Regla: si el commit es feat(vX.X.X/slug), el slug DEBE existir en
+# la versión COMMITEADA (HEAD) de docs/roadmap.md. Si no → BLOQUEADO.
+#
+# Por qué HEAD y no el archivo staged: evita el loophole de incluir
+# roadmap.md + código en el mismo commit. El orden correcto es:
+#   1. chore(vX.X.X/slug): ítem roadmap  → commit solo roadmap.md
+#   2. feat(vX.X.X/slug): implementación → ahora HEAD tiene el ítem
+#
+# Excepción 1: slugs "infra", "meta", "protocol", "chore", "hotfix"
+#   son trabajo de protocolo/infra — no necesitan ítem de producto.
+# Excepción 2: merge commits, cherry-picks, rebases — pasan siempre.
+#
+# Matching: case-insensitive. Slug con guiones → busca cada palabra
+# de 5+ chars individualmente. Normaliza acentos para matching en español.
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Merge/rebase/cherry-pick: saltar.
+if [[ -f .git/MERGE_HEAD ]] || [[ -f .git/CHERRY_PICK_HEAD ]] || [[ -f .git/REBASE_HEAD ]]; then
+    exit 0
+fi
+
+# Solo procesar commits de tipo feat
+# Nota: la regex se guarda en variable para evitar parsing issues en bash < 5
+FEAT_PATTERN='^feat\(v[0-9]+\.[0-9]+\.[0-9]+/([^):]+)\)'
+if [[ ! "$COMMIT_MSG" =~ $FEAT_PATTERN ]]; then
+    exit 0
+fi
+
+SLUG="${BASH_REMATCH[1]}"
+
+# Excepciones por slug
+EXEMPT_PREFIXES=("infra" "meta" "protocol" "hotfix" "chore" "fix" "refactor")
+for prefix in "${EXEMPT_PREFIXES[@]}"; do
+    if [[ "$SLUG" == "$prefix"* ]]; then
+        exit 0
+    fi
+done
+
+# Leer la versión COMMITEADA (HEAD) de roadmap.md — no el working copy
+# Esto cierra el loophole de "roadmap.md + feat en el mismo commit"
+COMMITTED_ROADMAP=$(git show HEAD:docs/roadmap.md 2>/dev/null)
+if [[ -z "$COMMITTED_ROADMAP" ]]; then
+    echo "⚠️  docs/roadmap.md no encontrado en HEAD — saltando verificación."
+    exit 0
+fi
+
+# Normalizar acentos para matching en español
+normalize() {
+    echo "$1" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null || echo "$1"
+}
+
+ROADMAP_NORMALIZED=$(normalize "$COMMITTED_ROADMAP")
+
+# Buscar el slug completo primero (case-insensitive, sin acentos)
+SLUG_NORMALIZED=$(normalize "$SLUG" | tr '[:upper:]' '[:lower:]')
+ROADMAP_LOWER=$(echo "$ROADMAP_NORMALIZED" | tr '[:upper:]' '[:lower:]')
+
+if echo "$ROADMAP_LOWER" | grep -q "$SLUG_NORMALIZED"; then
+    exit 0
+fi
+
+# Si no encontró el slug completo, buscar por palabras individuales (6+ chars,
+# excluyendo términos técnicos genéricos que aparecen en cualquier roadmap).
+STOP_WORDS=("feature" "service" "module" "create" "update" "delete" "handler"
+            "router" "webhook" "schema" "config" "panel" "client" "server"
+            "import" "export" "render" "button" "action" "status" "result"
+            # Palabras de dominio que aparecen en prácticamente todas las
+            # entradas del roadmap de Kobra — no sirven para identificar un
+            # feature específico:
+            "deudor" "deudora" "operador" "carolina" "cobran" "cobranza"
+            "conversacion" "whatsapp" "contacto" "sistema" "flujo")
+is_stop_word() {
+    local w="$1"
+    for sw in "${STOP_WORDS[@]}"; do [[ "$w" == "$sw" ]] && return 0; done
+    return 1
+}
+IFS='-' read -ra WORDS <<< "$SLUG_NORMALIZED"
+for word in "${WORDS[@]}"; do
+    if [[ ${#word} -ge 6 ]] && ! is_stop_word "$word" && echo "$ROADMAP_LOWER" | grep -q "$word"; then
+        exit 0
+    fi
+done
+
+# No encontrado — bloquear
+echo ""
+echo "✗ COMMIT BLOQUEADO — feature '$SLUG' no está en docs/roadmap.md"
+echo ""
+echo "  El protocolo requiere que el ítem exista en el roadmap ANTES del código."
+echo "  (CLAUDE.md → ROADMAP CHECK → 'primer commit = roadmap.md con el ítem nuevo')"
+echo ""
+echo "  Para resolver:"
+echo "    1. Abrí docs/roadmap.md"
+echo "    2. Agregá un ítem para '$SLUG' en la versión ## 🟡 X.X.X correspondiente"
+echo "    3. Commiteá SOLO roadmap.md: chore(vX.X.X/roadmap): agregar ítem $SLUG"
+echo "    4. Reintentá este commit feat(...) — ahora HEAD tiene el ítem"
+echo ""
+echo "  Si es trabajo de infra/protocolo sin ítem de producto, usá el tipo"
+echo "  'chore' o el prefijo 'infra-' en el slug — eso lo exime del check."
+echo ""
+exit 1
